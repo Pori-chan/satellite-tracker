@@ -221,7 +221,10 @@ function App() {
       return;
     }
 
-    const tle = stationTles.find(sat => sat.name === selectedSatelliteName);
+    const tle =
+      stationTles.find(sat => sat.name === selectedSatelliteName) ??
+      starlinkTles.find(sat => sat.name === selectedSatelliteName);
+
     if (!tle) return;
 
     const updatePath = () => {
