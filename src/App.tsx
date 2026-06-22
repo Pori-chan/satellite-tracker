@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import Map from "react-map-gl/maplibre";
+import Map, { Marker } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import DeckGL from "@deck.gl/react";
 import { ScatterplotLayer } from "@deck.gl/layers";
@@ -20,6 +20,7 @@ type SatellitePosition = {
 };
 
 const STARLINK_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STARLINK&FORMAT=tle";
+const STATION_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STATIONS&FORMAT=tle";
 
 function parseTleText(text: string): TleSatellite[] {
   const lines = text
@@ -69,17 +70,35 @@ function calculatePosition(tle: TleSatellite): SatellitePosition | null {
 }
 
 function App() {
-  const [tles, setTles] = useState<TleSatellite[]>([]);
-  const [positions, setPositions] = useState<SatellitePosition[]>([]);
+  const [starlinkTles, setStarlinkTles] = useState<TleSatellite[]>([]);
+  const [stationTles, setStationTles] = useState<TleSatellite[]>([]);
+  const [starlinkPositions, setStarlinkPositions] = useState<SatellitePosition[]>([]);
+  const [stationPositions, setStationPositions] = useState<SatellitePosition[]>([]);
+  const [selectedSatelliteName, setSelectedSatelliteName] = useState<string | null>(null);
+  const [viewState, setViewState] = useState({
+    longitude: 139.7671,
+    latitude: 35.6812,
+    zoom: 3,
+    pitch: 0,
+    bearing: 0,
+  });
 
-  useEffect(()=>{
-    const cachedText = localStorage.getItem("celstrak_starlink_tle");
+  const selectedSatellite = stationPositions.find((sat) => sat.name === selectedSatelliteName) ?? null;
 
-    if(!cachedText){
-      console.error("キャッシュなし");
+  useEffect(() => {
+    const cachedStalinkTleText = localStorage.getItem("celstrak_starlink_tle");
+    if (!cachedStalinkTleText) {
+      console.error("キャッシュなし:starlink");
       return;
     }
-    setTles(parseTleText(cachedText));
+    setStarlinkTles(parseTleText(cachedStalinkTleText));
+
+    const cachedStationTleText = localStorage.getItem("celestrak_stations_tle");
+    if (!cachedStationTleText) {
+      console.error("キャッシュなし:stations");
+      return;
+    }
+    setStationTles(parseTleText(cachedStationTleText));
 
     // const fetchTle = async () =>{
     //   const res = await fetch(STARLINK_TLE_URL);
@@ -88,75 +107,146 @@ function App() {
     // };
 
     // fetchTle();
-  },[]);
+  }, []);
 
-  useEffect(()=>{
-    if(tles.length===0)return;
+  useEffect(() => {
+    if (starlinkTles.length === 0) return;
 
-    const update = ()=>{
-      const next = tles
+    const update = () => {
+      const next = starlinkTles
         .map(calculatePosition)
-        .filter((p):p is SatellitePosition => p !== null);
+        .filter((p): p is SatellitePosition => p !== null);
 
-      setPositions(next);
+      setStarlinkPositions(next);
     };
 
     update();
 
-    const timerId = setInterval(update,1000);
+    const timerId = setInterval(update, 1000);
     return () => clearInterval(timerId);
-  },[tles]);
+  }, [starlinkTles]);
+
+  useEffect(() => {
+    if (stationTles.length === 0) return;
+
+    const update = () => {
+      const next = stationTles
+        .map(calculatePosition)
+        .filter((p): p is SatellitePosition => p !== null);
+
+      setStationPositions(next);
+    };
+
+    update();
+
+    const timerId = setInterval(update, 1000);
+    return () => clearInterval(timerId);
+  }, [stationTles]);
 
   const layers = useMemo(
-    ()=>[
+    () => [
       new ScatterplotLayer<SatellitePosition>({
         id: "starlink",
-        data: positions,
-        getPosition: (d)=>[d.longitude,d.latitude],
-        getRadius:20000,
-        radiusUnits:"meters",
-        getFillColor:[255,255,0,220],
-        pickable:false,
+        data: starlinkPositions,
+        getPosition: (d) => [d.longitude, d.latitude],
+        getRadius: 3,
+        radiusUnits: "pixels",
+        getFillColor: [255, 255, 0, 220],
+        pickable: false,
       }),
     ],
-    [positions]
+    [starlinkPositions]
   );
 
-  return(
-    <div style={{height:"100vh",width:"100vw"}}>
-      <DeckGL
-        initialViewState={{
-          longitude: 139.7671,
-          latitude: 35.6812,
-          zoom:3,
-          pitch:0,
-          bearing:0,
+  return (
+
+    <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
+      <Map
+        {...viewState}
+        onMove={(evt) => {
+          setViewState(evt.viewState);
         }}
+        mapStyle="https://demotiles.maplibre.org/style.json"
+        style={{ width: "100%", height: "100%", }}
+      >
+        {stationPositions.map((sat) => {
+          const isSelected = sat.name === selectedSatelliteName;
+
+          return (
+            <Marker
+              key={sat.name}
+              longitude={sat.longitude}
+              latitude={sat.latitude}
+            >
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedSatelliteName(sat.name);
+                }}
+                style={{
+                  fontSize: isSelected ? "32px" : "24px",
+                  cursor: "pointer",
+                }}
+              >
+                {isSelected ? "🔴" : "🛰️"}
+              </span>
+            </Marker>
+          );
+        })}
+      </Map>
+      <DeckGL
+        viewState={viewState}
         controller={true}
         layers={layers}
-      >
-        <Map
-          mapStyle="https://demotiles.maplibre.org/style.json"
-        />
-      </DeckGL>
+        style={{
+          position: "absolute",
+          inset: "0",
+          pointerEvents: "none",
+        }}
+      />
+
+      {
+        selectedSatellite && (
+          <div
+            style={{
+              position: "absolute",
+              top: 10,
+              right: 10,
+              zIndex: 1000,
+              backgroundColor: "white",
+              padding: "10px",
+              borderRadius: "8px",
+              fontFamily: "Arial, sans-serif",
+              fontSize: "13px",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+            }}
+          >
+            <div>名前: {selectedSatellite.name}</div>
+            <div>緯度: {selectedSatellite.latitude.toFixed(4)}</div>
+            <div>経度: {selectedSatellite.longitude.toFixed(4)}</div>
+            <div>高度: {selectedSatellite.altitude.toFixed(4)}</div>
+          </div>
+        )
+      }
 
       <div
         style={{
           position: "absolute",
-          bottom:10,
-          left:10,
-          zIndex:10,
-          backgroundColor:"white",
-          padding:"8px",
+          bottom: 10,
+          left: 10,
+          zIndex: 10,
+          backgroundColor: "white",
+          padding: "8px",
           borderRadius: "8px",
           fontFamily: "Arial, sans-serif",
           fontSize: "13px",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
         }}
       >
-        <div>STARLINK TLE: {tles.length}</div>
-        <div>STARLINK 表示: {positions.length}</div>
+        <div>STARLINK TLE: {starlinkTles.length}</div>
+        <div>STARLINK 表示: {starlinkPositions.length}</div>
       </div>
-    </div>
+    </div >
   );
 }
 
