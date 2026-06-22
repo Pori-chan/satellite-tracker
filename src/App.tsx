@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import Map, { Marker } from "react-map-gl/maplibre";
+import Map, { Marker, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import DeckGL from "@deck.gl/react";
-import { ScatterplotLayer } from "@deck.gl/layers";
+import { ScatterplotLayer, PathLayer } from "@deck.gl/layers";
 import * as satellite from "satellite.js";
+import { useRef } from "react";
+import type { DeckGLRef } from "@deck.gl/react"
 
 type TleSatellite = {
   name: string;
@@ -17,6 +19,15 @@ type SatellitePosition = {
   latitude: number;
   longitude: number;
   altitude: number;
+};
+
+type SatellitePath = {
+  name: string;
+  path: [number, number][][];
+}
+
+type OrbitPathSegment = {
+  path: [number, number][];
 };
 
 const STARLINK_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STARLINK&FORMAT=tle";
@@ -69,6 +80,49 @@ function calculatePosition(tle: TleSatellite): SatellitePosition | null {
   };
 }
 
+function calculatePositionAt(tle: TleSatellite, date: Date): SatellitePosition | null {
+  const pv = satellite.propagate(tle.satrec, date);
+
+  if (!pv || !pv.position) return null;
+
+  const gmst = satellite.gstime(date);
+  const geo = satellite.eciToGeodetic(pv.position, gmst);
+
+  return {
+    name: tle.name,
+    latitude: satellite.degreesLat(geo.latitude),
+    longitude: satellite.degreesLong(geo.longitude),
+    altitude: geo.height,
+  };
+}
+
+function splitPathByDateLine(path: [number, number][]): [number, number][][] {
+  const paths: [number, number][][] = [];
+  let current: [number, number][] = [];
+
+  for (const point of path) {
+    if (current.length === 0) {
+      current.push(point);
+      continue;
+    }
+
+    const prev = current[current.length - 1];
+
+    if (Math.abs(point[1] - prev[1]) > 180) {
+      paths.push(current);
+      current = [point];
+    } else {
+      current.push(point);
+    }
+  }
+
+  if (current.length > 0) {
+    paths.push(current);
+  }
+
+  return paths;
+}
+
 function App() {
   const [starlinkTles, setStarlinkTles] = useState<TleSatellite[]>([]);
   const [stationTles, setStationTles] = useState<TleSatellite[]>([]);
@@ -82,8 +136,14 @@ function App() {
     pitch: 0,
     bearing: 0,
   });
+  const [satellitePaths, setSatellitePaths] = useState<SatellitePath[]>([]);
 
-  const selectedSatellite = stationPositions.find((sat) => sat.name === selectedSatelliteName) ?? null;
+  const selectedSatellite =
+    stationPositions.find((sat) => sat.name === selectedSatelliteName) ??
+    starlinkPositions.find((sat) => sat.name === selectedSatelliteName) ??
+    null;
+  const mapRef = useRef<MapRef>(null);
+  const deckRef = useRef<DeckGLRef>(null);
 
   useEffect(() => {
     const cachedStalinkTleText = localStorage.getItem("celstrak_starlink_tle");
@@ -143,6 +203,62 @@ function App() {
     return () => clearInterval(timerId);
   }, [stationTles]);
 
+  useEffect(() => {
+    if (!selectedSatellite) return;
+
+    mapRef.current?.flyTo({
+      center: [
+        selectedSatellite.longitude,
+        selectedSatellite.latitude,
+      ],
+      duration: 1000,
+    });
+  }, [selectedSatellite]);
+
+  useEffect(() => {
+    if (!selectedSatelliteName) {
+      setSatellitePaths([]);
+      return;
+    }
+
+    const tle = stationTles.find(sat => sat.name === selectedSatelliteName);
+    if (!tle) return;
+
+    const updatePath = () => {
+      const now = new Date();
+      const path: [number, number][] = [];
+
+      for (let minutes = 0; minutes <= 30; minutes += 2) {
+        const future = new Date(now.getTime() + minutes * 60000);
+        const pos = calculatePositionAt(tle, future);
+        if (pos) {
+          path.push([pos.latitude, pos.longitude,]);
+        }
+      }
+
+      setSatellitePaths([{
+        name: tle.name,
+        path: splitPathByDateLine(path),
+      },
+      ]);
+    };
+
+    updatePath();
+
+    const timerId = setInterval(updatePath, 1000);
+    return () => clearInterval(timerId);
+  }, [selectedSatelliteName, stationTles]);
+
+  const orbitPathSegments = useMemo<OrbitPathSegment[]>(
+    () =>
+      satellitePaths.flatMap((satPath) =>
+        satPath.path.map((path) => ({
+          path: path.map(([lat, lon]) => [lon, lat] as [number, number]),
+        }))
+      ),
+    [satellitePaths]
+  );
+
   const layers = useMemo(
     () => [
       new ScatterplotLayer<SatellitePosition>({
@@ -152,22 +268,42 @@ function App() {
         getRadius: 3,
         radiusUnits: "pixels",
         getFillColor: [255, 255, 0, 220],
-        pickable: false,
+        pickable: true,
+      }),
+      new PathLayer<OrbitPathSegment>({
+        id: "orbit-path",
+        data: orbitPathSegments,
+        getPath: (d) => d.path,
+        getColor: [255, 0, 0],
+        widthUnits: "pixels",
+        getWidth: 3,
       }),
     ],
-    [starlinkPositions]
+    [starlinkPositions, orbitPathSegments]
   );
 
   return (
 
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
       <Map
+        ref={mapRef}
         {...viewState}
-        onMove={(evt) => {
-          setViewState(evt.viewState);
+        onMove={(evt) => setViewState(evt.viewState)}
+        onClick={(evt) => {
+          const picked = deckRef.current?.pickObject({
+            x: evt.point.x,
+            y: evt.point.y,
+            radius: 5,
+          });
+
+          if (picked?.object) {
+            setSelectedSatelliteName(picked.object.name);
+            return;
+          }
+          setSelectedSatelliteName(null);
         }}
-        mapStyle="https://demotiles.maplibre.org/style.json"
-        style={{ width: "100%", height: "100%", }}
+        mapStyle="https://tiles.openfreemap.org/styles/liberty"
+        style={{ width: "100%", height: "100%" }}
       >
         {stationPositions.map((sat) => {
           const isSelected = sat.name === selectedSatelliteName;
@@ -178,25 +314,36 @@ function App() {
               longitude={sat.longitude}
               latitude={sat.latitude}
             >
-              <span
+              <div
                 onClick={(e) => {
                   e.stopPropagation();
                   setSelectedSatelliteName(sat.name);
                 }}
                 style={{
-                  fontSize: isSelected ? "32px" : "24px",
                   cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: isSelected ? "24px" : "18px",
+                  color: isSelected ? "red" : "white",
+                  textShadow: "0 0 3px black",
+                  whiteSpace: "nowrap",
                 }}
               >
-                {isSelected ? "🔴" : "🛰️"}
-              </span>
+                <span style={{ fontSize: isSelected ? "24px" : "18px" }}>
+                  {isSelected ? "🔴" : "🛰️"}
+                </span>
+                {/* <span>{sat.name}</span> */}
+              </div>
             </Marker>
           );
         })}
       </Map>
+
       <DeckGL
+        ref={deckRef}
         viewState={viewState}
-        controller={true}
+        controller={false}
         layers={layers}
         style={{
           position: "absolute",
