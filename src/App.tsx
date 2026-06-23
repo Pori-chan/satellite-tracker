@@ -24,14 +24,63 @@ type SatellitePosition = {
 type SatellitePath = {
   name: string;
   path: [number, number][][];
-}
+};
 
 type OrbitPathSegment = {
   path: [number, number][];
+  progress: number;
 };
+
+type PositionFrame = {
+  time: number;
+  positions: SatellitePosition[];
+};
+
+type CrosshairSegment = {
+  path: [number, number][];
+};
+
+const CACHE_EXPIRE_MS = 2*60*60*1000;
 
 const STARLINK_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STARLINK&FORMAT=tle";
 const STATION_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STATIONS&FORMAT=tle";
+
+async function fetchTleWithCache(url:string,cacheKey:string):Promise<string|null>{
+  const timestampKey = `${cacheKey}_timestamp`;
+
+  const cachedText = localStorage.getItem(cacheKey);
+  const cachedTimestamp = localStorage.getItem(timestampKey);
+
+  if(cachedText && cachedTimestamp){
+    const age = Date.now() - Number(cachedTimestamp);
+
+    if(age < CACHE_EXPIRE_MS){
+      console.log(`${cacheKey} キャッシュ使用 (${Math.floor(age/60000)}分経過)`);
+      return cachedText;
+    }
+  }
+
+  try {
+    const response = await fetch(url);
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const text = await response.text();
+
+    localStorage.setItem(cacheKey,text);
+    localStorage.setItem(timestampKey,String(Date.now()));
+    console.log(`${cacheKey} 更新取得`);
+    return text;
+  }catch(error){
+    console.error(error);
+
+    if(cachedText){
+      console.warn(`%{cacheKey} 期限切れキャッシュ利用`);
+      return cachedText;
+    }
+
+    return null;
+  }
+}
 
 function parseTleText(text: string): TleSatellite[] {
   const lines = text
@@ -137,6 +186,7 @@ function App() {
     bearing: 0,
   });
   const [satellitePaths, setSatellitePaths] = useState<SatellitePath[]>([]);
+  const [pulse, setPulse] = useState(0);
 
   const selectedSatellite =
     stationPositions.find((sat) => sat.name === selectedSatelliteName) ??
@@ -144,29 +194,25 @@ function App() {
     null;
   const mapRef = useRef<MapRef>(null);
   const deckRef = useRef<DeckGLRef>(null);
+  const starlinkPrevFrameRef = useRef<PositionFrame | null>(null);
+  const starlinkNextFrameRef = useRef<PositionFrame | null>(null);
 
   useEffect(() => {
-    const cachedStalinkTleText = localStorage.getItem("celstrak_starlink_tle");
-    if (!cachedStalinkTleText) {
-      console.error("キャッシュなし:starlink");
-      return;
-    }
-    setStarlinkTles(parseTleText(cachedStalinkTleText));
+    const load = async () => {
+      const starlinkText = await fetchTleWithCache(
+        STARLINK_TLE_URL,
+        "celestrak_starlink_tle"
+      );
+      if (starlinkText) setStarlinkTles(parseTleText(starlinkText));
 
-    const cachedStationTleText = localStorage.getItem("celestrak_stations_tle");
-    if (!cachedStationTleText) {
-      console.error("キャッシュなし:stations");
-      return;
-    }
-    setStationTles(parseTleText(cachedStationTleText));
+      const stationText = await fetchTleWithCache(
+        STATION_TLE_URL,
+        "celestrak_stations_tle"
+      );
+      if(stationText)setStationTles(parseTleText(stationText));
+    };
 
-    // const fetchTle = async () =>{
-    //   const res = await fetch(STARLINK_TLE_URL);
-    //   const text = await res.text();
-    //   setTles(parseTleText(text));
-    // };
-
-    // fetchTle();
+    load();
   }, []);
 
   useEffect(() => {
@@ -177,7 +223,15 @@ function App() {
         .map(calculatePosition)
         .filter((p): p is SatellitePosition => p !== null);
 
-      setStarlinkPositions(next);
+      starlinkPrevFrameRef.current = starlinkNextFrameRef.current;
+      starlinkNextFrameRef.current = {
+        time: Date.now(),
+        positions: next,
+      };
+
+      if (!starlinkPrevFrameRef.current) {
+        setStarlinkPositions(next);
+      }
     };
 
     update();
@@ -204,14 +258,47 @@ function App() {
   }, [stationTles]);
 
   useEffect(() => {
+    let animationId = 0;
+
+    const animate = () => {
+      const prevFrame = starlinkPrevFrameRef.current;
+      const nextFrame = starlinkNextFrameRef.current;
+
+      if (prevFrame && nextFrame) {
+        const elapsed = Date.now() - nextFrame.time;
+        const t = Math.min(elapsed / 1000, 1);
+
+        const interpolated = nextFrame.positions.map((next, index) => {
+          const prev = prevFrame.positions[index];
+          if (!prev || prev.name !== next.name) return next;
+
+          return {
+            name: next.name,
+            latitude: prev.latitude + (next.latitude - prev.latitude) * t,
+            longitude: prev.longitude + (next.longitude - prev.longitude) * t,
+            altitude: prev.altitude + (next.altitude - prev.altitude) * t,
+          };
+        });
+
+        setStarlinkPositions(interpolated);
+      }
+
+      animationId = requestAnimationFrame(animate);
+    };
+
+    animationId = requestAnimationFrame(animate);
+
+    return () => cancelAnimationFrame(animationId);
+  }, []);
+
+  useEffect(() => {
     if (!selectedSatellite) return;
 
-    mapRef.current?.flyTo({
+    mapRef.current?.jumpTo({
       center: [
         selectedSatellite.longitude,
         selectedSatellite.latitude,
       ],
-      duration: 1000,
     });
   }, [selectedSatellite]);
 
@@ -231,7 +318,7 @@ function App() {
       const now = new Date();
       const path: [number, number][] = [];
 
-      for (let minutes = 0; minutes <= 30; minutes += 2) {
+      for (let minutes = 0; minutes <= 90; minutes += 2) {
         const future = new Date(now.getTime() + minutes * 60000);
         const pos = calculatePositionAt(tle, future);
         if (pos) {
@@ -252,15 +339,56 @@ function App() {
     return () => clearInterval(timerId);
   }, [selectedSatelliteName, stationTles]);
 
+  useEffect(() => {
+    let animationId = 0;
+
+    const animate = () => {
+      setPulse((Date.now() % 1000) / 1000);
+      animationId = requestAnimationFrame(animate);
+    };
+
+    animationId = requestAnimationFrame(animate);
+
+    return () => cancelAnimationFrame(animationId);
+  }, []);
+
   const orbitPathSegments = useMemo<OrbitPathSegment[]>(
     () =>
       satellitePaths.flatMap((satPath) =>
-        satPath.path.map((path) => ({
-          path: path.map(([lat, lon]) => [lon, lat] as [number, number]),
-        }))
+        satPath.path.flatMap((path) =>
+          path.slice(0, -1).map((point, index) => ({
+            path: [
+              [point[1], point[0]],
+              [path[index + 1][1], path[index + 1][0]],
+            ] as [number, number][],
+            progress: index / Math.max(path.length - 2, 1),
+          }))
+        )
       ),
     [satellitePaths]
   );
+
+  const crosshairSegments = useMemo<CrosshairSegment[]>(() => {
+    if (!selectedSatellite) return [];
+
+    const lon = selectedSatellite.longitude;
+    const lat = selectedSatellite.latitude;
+
+    const sizeLat = 0.25;
+    const sizeLon = 0.25 / Math.cos(lat * Math.PI / 180);
+    const gap = 0.15;
+
+    return [
+      { path: [[lon - sizeLon, lat + sizeLat], [lon - gap, lat + sizeLat]] },
+      { path: [[lon - sizeLon, lat + sizeLat], [lon - sizeLon, lat + gap]] },
+      { path: [[lon + gap, lat + sizeLat], [lon + sizeLon, lat + sizeLat]] },
+      { path: [[lon + sizeLon, lat + sizeLat], [lon + sizeLon, lat + gap]] },
+      { path: [[lon - sizeLon, lat - sizeLat], [lon - gap, lat - sizeLat]] },
+      { path: [[lon - sizeLon, lat - sizeLat], [lon - sizeLon, lat - gap]] },
+      { path: [[lon + Math.min(gap, sizeLon), lat - sizeLat], [lon + sizeLon, lat - sizeLat]] },
+      { path: [[lon + sizeLon, lat - sizeLat], [lon + sizeLon, lat - gap]] },
+    ];
+  }, [selectedSatellite]);
 
   const layers = useMemo(
     () => [
@@ -273,16 +401,51 @@ function App() {
         getFillColor: [255, 255, 0, 220],
         pickable: true,
       }),
+      new ScatterplotLayer<SatellitePosition>({
+        id: "selected-satellite-ring",
+        data: selectedSatellite ? [selectedSatellite] : [],
+        getPosition: (d) => [d.longitude, d.latitude],
+        getRadius: 18 + pulse * 10,
+        radiusUnits: "pixels",
+        stroked: true,
+        filled: false,
+        getLineColor: [0, 160, 255, Math.round(240 * (1 - pulse))],
+        lineWidthUnits: "pixels",
+        getLineWidth: 3,
+        pickable: false,
+      }),
+      new ScatterplotLayer<SatellitePosition>({
+        id: "selected-satellite-ring-outer",
+        data: selectedSatellite ? [selectedSatellite] : [],
+        getPosition: (d) => [d.longitude, d.latitude],
+        getRadius: 24 + pulse * 14,
+        radiusUnits: "pixels",
+        stroked: true,
+        filled: false,
+        getLineColor: [0, 160, 255, Math.round(120 * (1 - pulse))],
+        lineWidthUnits: "pixels",
+        getLineWidth: 2,
+        pickable: false,
+      }),
       new PathLayer<OrbitPathSegment>({
         id: "orbit-path",
         data: orbitPathSegments,
         getPath: (d) => d.path,
-        getColor: [255, 0, 0],
+        getColor: (d) => [80, 180, 255, Math.round(255 * (1 - d.progress)),],
         widthUnits: "pixels",
-        getWidth: 3,
+        getWidth: (d) => 1 + 1 * Math.pow(1 - d.progress, 2),
+      }),
+      new PathLayer<CrosshairSegment>({
+        id: "crosshair",
+        data: crosshairSegments,
+        getPath: (d) => d.path,
+        getColor: [0, 180, 255, 220],
+        widthUnits: "pixels",
+        getWidth: 2,
+        pickable: false,
       }),
     ],
-    [starlinkPositions, orbitPathSegments]
+    [selectedSatellite, starlinkPositions, orbitPathSegments, crosshairSegments, pulse]
   );
 
   return (
@@ -333,8 +496,8 @@ function App() {
                   whiteSpace: "nowrap",
                 }}
               >
-                <span style={{ fontSize: isSelected ? "24px" : "18px" }}>
-                  {isSelected ? "🔴" : "🛰️"}
+                <span style={{ fontSize: "18px" }}>
+                  🛰️
                 </span>
                 {/* <span>{sat.name}</span> */}
               </div>
