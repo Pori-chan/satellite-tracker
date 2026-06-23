@@ -40,41 +40,41 @@ type CrosshairSegment = {
   path: [number, number][];
 };
 
-const CACHE_EXPIRE_MS = 2*60*60*1000;
+const CACHE_EXPIRE_MS = 2 * 60 * 60 * 1000;
 
 const STARLINK_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STARLINK&FORMAT=tle";
 const STATION_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STATIONS&FORMAT=tle";
 
-async function fetchTleWithCache(url:string,cacheKey:string):Promise<string|null>{
+async function fetchTleWithCache(url: string, cacheKey: string): Promise<string | null> {
   const timestampKey = `${cacheKey}_timestamp`;
 
   const cachedText = localStorage.getItem(cacheKey);
   const cachedTimestamp = localStorage.getItem(timestampKey);
 
-  if(cachedText && cachedTimestamp){
+  if (cachedText && cachedTimestamp) {
     const age = Date.now() - Number(cachedTimestamp);
 
-    if(age < CACHE_EXPIRE_MS){
-      console.log(`${cacheKey} キャッシュ使用 (${Math.floor(age/60000)}分経過)`);
+    if (age < CACHE_EXPIRE_MS) {
+      console.log(`${cacheKey} キャッシュ使用 (${Math.floor(age / 60000)}分経過)`);
       return cachedText;
     }
   }
 
   try {
     const response = await fetch(url);
-    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const text = await response.text();
 
-    localStorage.setItem(cacheKey,text);
-    localStorage.setItem(timestampKey,String(Date.now()));
+    localStorage.setItem(cacheKey, text);
+    localStorage.setItem(timestampKey, String(Date.now()));
     console.log(`${cacheKey} 更新取得`);
     return text;
-  }catch(error){
+  } catch (error) {
     console.error(error);
 
-    if(cachedText){
-      console.warn(`%{cacheKey} 期限切れキャッシュ利用`);
+    if (cachedText) {
+      console.warn(`${cacheKey} 期限切れキャッシュ利用`);
       return cachedText;
     }
 
@@ -209,7 +209,7 @@ function App() {
         STATION_TLE_URL,
         "celestrak_stations_tle"
       );
-      if(stationText)setStationTles(parseTleText(stationText));
+      if (stationText) setStationTles(parseTleText(stationText));
     };
 
     load();
@@ -337,7 +337,7 @@ function App() {
 
     const timerId = setInterval(updatePath, 1000);
     return () => clearInterval(timerId);
-  }, [selectedSatelliteName, stationTles]);
+  }, [selectedSatelliteName, stationTles, starlinkTles]);
 
   useEffect(() => {
     let animationId = 0;
