@@ -1206,10 +1206,13 @@ function App() {
       <div
         style={{
           position: "absolute",
-          bottom: 10,
-          left: 10,
+          bottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
+          left: "calc(10px + env(safe-area-inset-left, 0px))",
           zIndex: 1000,
-          minWidth: "190px",
+          minWidth: "min(190px, calc(100vw - 20px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)))",
+          maxWidth: "calc(100vw - 20px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px))",
+          maxHeight: "calc(100vh - 20px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))",
+          overflow: "auto",
           padding: "10px 14px",
           background: "rgba(5,10,20,0.88)",
           border: "1px solid rgba(0,191,255,0.7)",
