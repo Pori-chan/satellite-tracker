@@ -182,3 +182,455 @@
     border-right-color: var(--border);
   }
 }
+
+.sat-hud {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+  pointer-events: none;
+  color: #edf6ff;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.sat-hud-shared {
+  z-index: 1300;
+}
+
+.sat-hud button {
+  pointer-events: auto;
+  font: inherit;
+}
+
+.sat-hud-top {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  left: max(14px, env(safe-area-inset-left, 0px));
+  right: max(14px, env(safe-area-inset-right, 0px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.sat-hud-brand {
+  display: inline-flex;
+  align-items: center;
+  min-width: 186px;
+  font-size: 22px;
+  font-weight: 800;
+  -webkit-text-stroke: 0.8px rgba(0, 0, 0, 0.9);
+  paint-order: stroke fill;
+  text-shadow:
+    -1px -1px 0 rgba(0, 0, 0, 0.95),
+    1px -1px 0 rgba(0, 0, 0, 0.95),
+    -1px 1px 0 rgba(0, 0, 0, 0.95),
+    1px 1px 0 rgba(0, 0, 0, 0.95),
+    0 2px 8px rgba(0, 0, 0, 0.92),
+    0 0 18px rgba(0, 136, 255, 0.45);
+}
+
+.sat-hud-mode,
+.sat-hud-chip,
+.sat-hud-card,
+.sat-hud-bottom {
+  background:
+    linear-gradient(145deg, rgba(6, 16, 28, 0.88), rgba(2, 8, 14, 0.66)),
+    rgba(2, 8, 14, 0.72);
+  border: 1px solid rgba(98, 160, 210, 0.32);
+  box-shadow:
+    0 0 28px rgba(0, 122, 255, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+.sat-hud-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 108px;
+  min-height: 38px;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 8px;
+}
+
+.sat-hud-mode button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8fb1cf;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.sat-hud-mode button[aria-pressed="true"] {
+  color: #eff9ff;
+  background: rgba(0, 128, 255, 0.28);
+  box-shadow: inset 0 0 16px rgba(0, 136, 255, 0.26);
+}
+
+.sat-hud-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  color: #f5f8ff;
+  cursor: pointer;
+}
+
+.sat-hud-chip:not(.is-active) {
+  opacity: 0.48;
+}
+
+.sat-hud-chip strong {
+  color: #ffd400;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.sat-hud-dot {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.sat-hud-dot-starlink {
+  background: #ffd400;
+  box-shadow: 0 0 12px rgba(255, 212, 0, 0.82);
+}
+
+.sat-hud-dot-station {
+  background: #e8edf4;
+  box-shadow: 0 0 10px rgba(220, 235, 255, 0.68);
+}
+
+.sat-hud-card {
+  position: absolute;
+  border-radius: 8px;
+  color: #dfeaf5;
+}
+
+.sat-hud-card h2,
+.sat-hud-card-title {
+  margin: 0;
+  color: #f4f8ff;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.sat-hud-orbit-key {
+  top: 72px;
+  left: 108px;
+  width: 250px;
+  padding: 22px 24px;
+}
+
+.sat-hud-orbit-key-body {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  column-gap: 18px;
+  align-items: center;
+  margin-top: 22px;
+}
+
+.sat-hud-gradient {
+  width: 30px;
+  height: 218px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #0038d8 0%, #007dff 50%, #a8d2ff 100%);
+  box-shadow: 0 0 20px rgba(0, 124, 255, 0.28);
+}
+
+.sat-hud-key-labels {
+  display: grid;
+  gap: 15px;
+  font-size: 16px;
+}
+
+.sat-hud-key-labels .is-now,
+.sat-hud-prediction-row.is-now {
+  color: #078cff;
+}
+
+.sat-hud-info-card {
+  top: 50px;
+  right: 14px;
+  width: min(320px, calc(100vw - 28px));
+  min-height: 250px;
+  padding: 24px 26px;
+}
+
+.sat-hud-sat-name {
+  margin-top: 28px;
+  max-width: 100%;
+  overflow: hidden;
+  color: #078cff;
+  font-size: 23px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sat-hud-info-grid {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) auto;
+  gap: 17px 18px;
+  margin-top: 28px;
+  font-size: 16px;
+}
+
+.sat-hud-info-grid span {
+  color: #aab8c8;
+}
+
+.sat-hud-info-grid strong {
+  color: #f5f8ff;
+  font-weight: 500;
+  text-align: right;
+}
+
+.sat-hud-prediction-card {
+  right: 14px;
+  bottom: 114px;
+  width: min(320px, calc(100vw - 28px));
+  padding: 22px 26px 24px;
+}
+
+.sat-hud-prediction-list {
+  display: grid;
+  gap: 0;
+  margin-top: 22px;
+}
+
+.sat-hud-prediction-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(94px, 1fr) auto;
+  min-height: 37px;
+  align-items: center;
+  color: #dce6f0;
+  font-size: 15px;
+}
+
+.sat-hud-prediction-row::before {
+  position: absolute;
+  top: 18px;
+  bottom: -18px;
+  left: 6px;
+  width: 2px;
+  content: "";
+  background: rgba(70, 120, 170, 0.55);
+}
+
+.sat-hud-prediction-row:last-child::before {
+  display: none;
+}
+
+.sat-hud-prediction-row strong {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sat-hud-timeline-dot {
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #587393;
+}
+
+.sat-hud-prediction-row:nth-child(1) .sat-hud-timeline-dot {
+  background: #008cff;
+  box-shadow: 0 0 14px rgba(0, 140, 255, 0.85);
+}
+
+.sat-hud-prediction-row:nth-child(2) .sat-hud-timeline-dot {
+  background: #1c9bff;
+  box-shadow: 0 0 13px rgba(28, 155, 255, 0.72);
+}
+
+.sat-hud-prediction-row:nth-child(3) .sat-hud-timeline-dot {
+  background: #39aaff;
+  box-shadow: 0 0 12px rgba(57, 170, 255, 0.64);
+}
+
+.sat-hud-prediction-row:nth-child(4) .sat-hud-timeline-dot {
+  background: #58b8ff;
+  box-shadow: 0 0 11px rgba(88, 184, 255, 0.56);
+}
+
+.sat-hud-prediction-row:nth-child(5) .sat-hud-timeline-dot {
+  background: #82c9ff;
+  box-shadow: 0 0 10px rgba(130, 201, 255, 0.48);
+}
+
+.sat-hud-prediction-row:nth-child(6) .sat-hud-timeline-dot {
+  background: #addaff;
+  box-shadow: 0 0 9px rgba(173, 218, 255, 0.42);
+}
+
+.sat-hud-prediction-row:nth-child(7) .sat-hud-timeline-dot {
+  background: #d7ecff;
+  box-shadow: 0 0 8px rgba(215, 236, 255, 0.36);
+}
+
+.sat-hud-bottom {
+  position: absolute;
+  right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  left: max(12px, env(safe-area-inset-left, 0px));
+  display: flex;
+  min-height: 70px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 24px;
+  border-radius: 8px;
+}
+
+.sat-hud-bottom > div:first-child {
+  display: grid;
+  gap: 3px;
+  color: #afbdca;
+}
+
+.sat-hud-bottom > div:first-child strong {
+  color: #f3f7fb;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.sat-hud-bottom-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.sat-hud-bottom-legend > span,
+.sat-hud-mini-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #eff5fb;
+  white-space: nowrap;
+}
+
+.sat-hud-line {
+  display: inline-block;
+  width: 28px;
+  height: 3px;
+  border-radius: 999px;
+  background: #078cff;
+  box-shadow: 0 0 12px rgba(0, 136, 255, 0.7);
+}
+
+.sat-hud-mini-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sat-hud-mini-toggle:not(.is-active) {
+  opacity: 0.42;
+}
+
+.sat-hud-mini-toggle i {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: 0 0 9px currentColor;
+}
+
+.sat-hud-mini-toggle span {
+  display: grid;
+  gap: 2px;
+  line-height: 1.05;
+}
+
+.sat-hud-mini-toggle b {
+  color: #f3f8ff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.sat-hud-mini-toggle small {
+  color: #8ea5ba;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sat-hud-mini-toggle.is-active small {
+  color: #b6c9dc;
+}
+
+.sat-hud-rotation-icon {
+  position: relative;
+  border: 1px solid #078cff;
+  background: transparent;
+}
+
+.sat-hud-rotation-icon::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #078cff;
+  content: "";
+  box-shadow: 0 0 8px rgba(0, 136, 255, 0.9);
+}
+
+@media (max-width: 900px) {
+  .sat-hud-top {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .sat-hud-brand {
+    min-width: min(100%, 220px);
+    font-size: 18px;
+  }
+
+  .sat-hud-orbit-key {
+    display: none;
+  }
+
+  .sat-hud-info-card,
+  .sat-hud-prediction-card {
+    right: 10px;
+    left: 10px;
+    width: auto;
+  }
+
+  .sat-hud-info-card {
+    top: 118px;
+    min-height: 0;
+  }
+
+  .sat-hud-prediction-card {
+    display: none;
+  }
+
+  .sat-hud-bottom {
+    min-height: 74px;
+    padding: 10px 14px;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sat-hud-bottom-legend {
+    justify-content: flex-start;
+    gap: 12px;
+    font-size: 13px;
+  }
+}

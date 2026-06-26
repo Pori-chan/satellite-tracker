@@ -6,6 +6,8 @@ import { ScatterplotLayer, PathLayer, IconLayer, TextLayer } from "@deck.gl/laye
 import * as satellite from "satellite.js";
 import { useRef } from "react";
 import type { DeckGLRef } from "@deck.gl/react"
+import Earth3DView from "./Earth3DView";
+import "./App.css";
 
 type TleSatellite = {
   name: string;
@@ -28,6 +30,7 @@ type AdditionalSatellitePosition = SatellitePosition & {
 type SatellitePath = {
   name: string;
   path: [number, number][][];
+  fullPath: [number, number][];
 };
 
 type OrbitPathSegment = {
@@ -71,6 +74,8 @@ type WorldCrosshairSegment = {
   longitudeOffset: number;
 };
 
+type DisplayMode = "2d" | "3d";
+
 const CACHE_EXPIRE_MS = 2 * 60 * 60 * 1000;
 const WORLD_COPY_LONGITUDE_OFFSETS = [-720, -360, 0, 360, 720];
 const STATION_ICON_URL = `${import.meta.env.BASE_URL}station-icon.png`;
@@ -107,6 +112,7 @@ const STATION_ANIMATION_FRAME_MS = 1000 / STATION_ANIMATION_FPS;
 const ADDITIONAL_ANIMATION_FRAME_MS = 1000 / ADDITIONAL_ANIMATION_FPS;
 const STARLINK_VIEW_PADDING_LONGITUDE = 20;
 const STARLINK_VIEW_PADDING_LATITUDE = 10;
+const ORBIT_PREDICTION_MINUTES = [0, 15, 30, 45, 60, 75, 90];
 
 async function fetchTleWithCache(url: string, cacheKey: string): Promise<string | null> {
   const timestampKey = `${cacheKey}_timestamp`;
@@ -283,6 +289,25 @@ function getPickedSatelliteName(object: unknown): string | null {
   return null;
 }
 
+function formatCount(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
+function formatCoordinate(value: number, axis: "latitude" | "longitude"): string {
+  const direction =
+    axis === "latitude"
+      ? value >= 0 ? "N" : "S"
+      : value >= 0 ? "E" : "W";
+
+  return `${Math.abs(value).toFixed(2)}° ${direction}`;
+}
+
+function formatUtcDate(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+}
+
 function App() {
   const [starlinkTles, setStarlinkTles] = useState<TleSatellite[]>([]);
   const [stationTles, setStationTles] = useState<TleSatellite[]>([]);
@@ -304,6 +329,9 @@ function App() {
   const [starlinkRenderTick, setStarlinkRenderTick] = useState(0);
   const [stationRenderTick, setStationRenderTick] = useState(0);
   const [additionalRenderTick, setAdditionalRenderTick] = useState(0);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>("2d");
+  const [clockNow, setClockNow] = useState(() => new Date());
+  const [earthRotationEnabled, setEarthRotationEnabled] = useState(false);
   const [showStarlink, setShowStarlink] = useState(true);
   const [showStations, setShowStations] = useState(true);
   const [showAdditionalGroups, setShowAdditionalGroups] = useState<Record<string, boolean>>(
@@ -327,6 +355,8 @@ function App() {
       (sat) => showAdditionalGroups[sat.groupId] && sat.name === followSatelliteName
     ) ??
     null;
+  const threeDPositionVersion =
+    starlinkRenderTick + stationRenderTick + additionalRenderTick;
   const mapRef = useRef<MapRef>(null);
   const deckRef = useRef<DeckGLRef>(null);
   const starlinkPrevFrameRef = useRef<PositionFrame | null>(null);
@@ -368,6 +398,11 @@ function App() {
     };
 
     load();
+  }, []);
+
+  useEffect(() => {
+    const timerId = setInterval(() => setClockNow(new Date()), 1000);
+    return () => clearInterval(timerId);
   }, []);
 
   useEffect(() => {
@@ -694,6 +729,7 @@ function App() {
       setSatellitePaths([{
         name: tle.name,
         path: splitPathByDateLine(path),
+        fullPath: path,
       },
       ]);
     };
@@ -1082,62 +1118,243 @@ function App() {
     [starlinkLayers, stationLayers, additionalSatelliteLayers, selectedLayers, worldSelectedSatellitePositions, worldOrbitPathSegments, worldCrosshairSegments, pulse]
   );
 
+  const selectedOrbitPredictionRows = useMemo(() => {
+    if (!selectedSatellite) return [];
+
+    const selectedPath = satellitePaths.find((path) => path.name === selectedSatellite.name);
+    const fullPath = selectedPath?.fullPath ?? [];
+
+    return ORBIT_PREDICTION_MINUTES.map((minutes) => {
+      const pathIndex = Math.round(minutes / 2);
+      const point = minutes === 0
+        ? [selectedSatellite.latitude, selectedSatellite.longitude] as [number, number]
+        : fullPath[pathIndex];
+
+      return {
+        minutes,
+        latitude: point?.[0] ?? null,
+        longitude: point?.[1] ?? null,
+      };
+    });
+  }, [selectedSatellite, satellitePaths]);
+
   return (
 
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-      <Map
-        ref={mapRef}
-        {...viewState}
-        renderWorldCopies={true}
-        onMove={(evt) => setViewState(evt.viewState)}
-        onClick={(evt) => {
-          const picked = deckRef.current?.pickObject({
-            x: evt.point.x,
-            y: evt.point.y,
-            radius: 5,
-          });
-          const pickedSatelliteName = getPickedSatelliteName(picked?.object);
+      {displayMode === "2d" ? (
+        <>
+          <Map
+            ref={mapRef}
+            {...viewState}
+            renderWorldCopies={true}
+            onMove={(evt) => setViewState(evt.viewState)}
+            onClick={(evt) => {
+              const picked = deckRef.current?.pickObject({
+                x: evt.point.x,
+                y: evt.point.y,
+                radius: 5,
+              });
+              const pickedSatelliteName = getPickedSatelliteName(picked?.object);
 
-          if (pickedSatelliteName) {
-            setSelectedSatelliteName(pickedSatelliteName);
-            return;
-          }
-          setSelectedSatelliteName(null);
-          setFollowSatelliteName(null);
-        }}
-        onDblClick={(evt) => {
-          const picked = deckRef.current?.pickObject({
-            x: evt.point.x,
-            y: evt.point.y,
-            radius: 5,
-          });
-          const pickedSatelliteName = getPickedSatelliteName(picked?.object);
+              if (pickedSatelliteName) {
+                setSelectedSatelliteName(pickedSatelliteName);
+                return;
+              }
+              setSelectedSatelliteName(null);
+              setFollowSatelliteName(null);
+            }}
+            onDblClick={(evt) => {
+              const picked = deckRef.current?.pickObject({
+                x: evt.point.x,
+                y: evt.point.y,
+                radius: 5,
+              });
+              const pickedSatelliteName = getPickedSatelliteName(picked?.object);
 
-          if (pickedSatelliteName) {
-            setSelectedSatelliteName(pickedSatelliteName);
-            setFollowSatelliteName(pickedSatelliteName);
-            return;
-          }
-          setFollowSatelliteName(null)
-        }}
-        mapStyle="https://tiles.openfreemap.org/styles/liberty"
-        style={{ width: "100%", height: "100%" }}
-      />
+              if (pickedSatelliteName) {
+                setSelectedSatelliteName(pickedSatelliteName);
+                setFollowSatelliteName(pickedSatelliteName);
+                return;
+              }
+              setFollowSatelliteName(null)
+            }}
+            mapStyle="https://tiles.openfreemap.org/styles/liberty"
+            style={{ width: "100%", height: "100%" }}
+          />
 
-      <DeckGL
-        ref={deckRef}
-        viewState={viewState}
-        controller={false}
-        layers={layers}
-        style={{
-          position: "absolute",
-          inset: "0",
-          pointerEvents: "none",
-        }}
-      />
+          <DeckGL
+            ref={deckRef}
+            viewState={viewState}
+            controller={false}
+            layers={layers}
+            style={{
+              position: "absolute",
+              inset: "0",
+              pointerEvents: "none",
+            }}
+          />
+        </>
+      ) : (
+        <Earth3DView
+          starlinkPositions={starlinkPositions}
+          stationPositions={stationPositions}
+          additionalPositions={additionalPositions}
+          satellitePaths={satellitePaths}
+          selectedSatellite={selectedSatellite}
+          selectedSatelliteName={selectedSatelliteName}
+          showStarlink={showStarlink}
+          showStations={showStations}
+          showAdditionalGroups={showAdditionalGroups}
+          additionalGroups={ADDITIONAL_SATELLITE_GROUPS}
+          positionVersion={threeDPositionVersion}
+          earthRotationEnabled={earthRotationEnabled}
+          onSelectSatellite={(name) => {
+            setSelectedSatelliteName(name);
+            if (!name) setFollowSatelliteName(null);
+          }}
+          onFollowSatellite={setFollowSatelliteName}
+        />
+      )}
+
+      <div className="sat-hud sat-hud-shared" aria-label="Satellite tracker mode controls">
+        <header className="sat-hud-top">
+          <div className="sat-hud-brand">
+            <span>Satellite Tracker</span>
+          </div>
+          <div className="sat-hud-mode">
+            {(["2d", "3d"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setDisplayMode(mode)}
+                aria-pressed={displayMode === mode}
+              >
+                {mode.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </header>
+      </div>
+
+      {displayMode === "3d" && (
+        <div className="sat-hud" aria-label="3D satellite tracker HUD">
+          {selectedSatellite && (
+            <section className="sat-hud-card sat-hud-info-card">
+              <div className="sat-hud-card-title">衛星情報</div>
+              <div className="sat-hud-sat-name" title={selectedSatellite.name}>
+                {selectedSatellite.name}
+              </div>
+              <div className="sat-hud-info-grid">
+                <span>高度</span>
+                <strong>{selectedSatellite.altitude.toFixed(1)} km</strong>
+                <span>緯度</span>
+                <strong>{formatCoordinate(selectedSatellite.latitude, "latitude")}</strong>
+                <span>経度</span>
+                <strong>{formatCoordinate(selectedSatellite.longitude, "longitude")}</strong>
+              </div>
+            </section>
+          )}
+
+          {selectedSatellite && selectedOrbitPredictionRows.length > 0 && (
+            <section className="sat-hud-card sat-hud-prediction-card">
+              <h2>軌道予測（90分）</h2>
+              <div className="sat-hud-prediction-list">
+                {selectedOrbitPredictionRows.map((row, index) => (
+                  <div
+                    key={row.minutes}
+                    className={index === 0 ? "sat-hud-prediction-row is-now" : "sat-hud-prediction-row"}
+                  >
+                    <span className="sat-hud-timeline-dot" />
+                    <span>{row.minutes === 0 ? "現在（0分）" : `${row.minutes}分後`}</span>
+                    <strong>
+                      {row.latitude === null || row.longitude === null
+                        ? "計算中"
+                        : `${formatCoordinate(row.latitude, "latitude")}, ${formatCoordinate(row.longitude, "longitude")}`}
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <footer className="sat-hud-bottom">
+            <div>
+              <span>UTC</span>
+              <strong>{formatUtcDate(clockNow)}</strong>
+            </div>
+            <div className="sat-hud-bottom-legend">
+              <span><i className="sat-hud-line" />軌道（90分予測）</span>
+              <button
+                type="button"
+                className={earthRotationEnabled ? "sat-hud-mini-toggle is-active" : "sat-hud-mini-toggle"}
+                onClick={() => setEarthRotationEnabled((enabled) => !enabled)}
+              >
+                <i className="sat-hud-rotation-icon" />
+                <span>
+                  <b>自転</b>
+                  <small>{earthRotationEnabled ? "ON" : "OFF"}</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={showStarlink ? "sat-hud-mini-toggle is-active" : "sat-hud-mini-toggle"}
+                onClick={() => setShowStarlink((visible) => !visible)}
+              >
+                <i className="sat-hud-dot sat-hud-dot-starlink" />
+                <span>
+                  <b>STARLINK</b>
+                  <small>{formatCount(showStarlink ? starlinkPositions.length : 0)}/{formatCount(starlinkTles.length)}</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={showStations ? "sat-hud-mini-toggle is-active" : "sat-hud-mini-toggle"}
+                onClick={() => setShowStations((visible) => !visible)}
+              >
+                <i className="sat-hud-dot sat-hud-dot-station" />
+                <span>
+                  <b>STATIONS</b>
+                  <small>{formatCount(showStations ? stationPositions.length : 0)}/{formatCount(stationTles.length)}</small>
+                </span>
+              </button>
+              {ADDITIONAL_SATELLITE_GROUPS.map((group) => {
+                const visible = showAdditionalGroups[group.id] ?? true;
+                const visibleCount = visible
+                  ? additionalPositions.filter((sat) => sat.groupId === group.id).length
+                  : 0;
+                const totalCount = additionalTles[group.id]?.length ?? 0;
+
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    className={visible ? "sat-hud-mini-toggle is-active" : "sat-hud-mini-toggle"}
+                    onClick={() =>
+                      setShowAdditionalGroups((current) => ({
+                        ...current,
+                        [group.id]: !(current[group.id] ?? true),
+                      }))
+                    }
+                  >
+                    <i
+                      style={{
+                        background: `rgb(${group.color[0]}, ${group.color[1]}, ${group.color[2]})`,
+                      }}
+                    />
+                    <span>
+                      <b>{group.label}</b>
+                      <small>{formatCount(visibleCount)}/{formatCount(totalCount)}</small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </footer>
+        </div>
+      )}
 
       {
-        selectedSatellite && (
+        selectedSatellite && displayMode === "2d" && (
           <div
             style={{
               position: "absolute",
@@ -1203,6 +1420,7 @@ function App() {
         )
       }
 
+      {displayMode === "2d" && (
       <div
         style={{
           position: "absolute",
@@ -1359,6 +1577,7 @@ function App() {
           })}
         </div>
       </div >
+      )}
     </div>
   );
 }
