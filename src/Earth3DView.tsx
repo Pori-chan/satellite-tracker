@@ -37,12 +37,21 @@ type Earth3DViewProps = {
   additionalGroups: AdditionalGroup[];
   positionVersion: number;
   earthRotationEnabled: boolean;
+  dayNightEnabled: boolean;
   onSelectSatellite: (name: string | null) => void;
   onFollowSatellite: (name: string | null) => void;
 };
 
 type PickTarget = {
   names: string[];
+};
+
+type PickCandidate = {
+  object: THREE.Object3D;
+  index?: number;
+  distance: number;
+  screenDistance: number;
+  priority: number;
 };
 
 type StationSpriteSet = {
@@ -52,13 +61,28 @@ type StationSpriteSet = {
     name: string;
     icon: THREE.Sprite;
     label: THREE.Sprite;
+    labelSlot: StationLabelSlot;
+    labelAnchor: THREE.Vector3;
   }[];
+};
+
+type StationLabelSlot = {
+  index: number;
+  total: number;
 };
 
 const EARTH_RADIUS_KM = 6371;
 const EARTH_SCENE_RADIUS = 1;
 const SATELLITE_ALTITUDE_SCALE = 1;
 const STATION_ICON_URL = `${import.meta.env.BASE_URL}station-icon.png`;
+const SATELLITE_PICK_WORLD_THRESHOLD = 0.018;
+const SATELLITE_PICK_SCREEN_THRESHOLD_PX = 9;
+const SPRITE_PICK_SCREEN_THRESHOLD_PX = 28;
+const STATION_ICON_SCREEN_SIZE_PX = 34;
+const STATION_LABEL_SCREEN_WIDTH_PX = 150;
+const STATION_LABEL_SCREEN_HEIGHT_PX = 33;
+const STATION_LABEL_OFFSET_X_PX = 100;
+const STATION_LABEL_STACK_STEP_PX = 18;
 const EARTH_TEXTURES = {
   day: `${import.meta.env.BASE_URL}earth/earth_day.jpg`,
   lights: `${import.meta.env.BASE_URL}earth/earth_lights.png`,
@@ -87,9 +111,9 @@ function latLonAltitudeToVector(
   const cosLat = Math.cos(lat);
 
   return new THREE.Vector3(
-    radius * cosLat * Math.sin(lon),
+    radius * cosLat * Math.cos(lon),
     radius * Math.sin(lat),
-    radius * cosLat * Math.cos(lon)
+    -radius * cosLat * Math.sin(lon)
   );
 }
 
@@ -312,6 +336,7 @@ function makeStationSprites(
   const group = new THREE.Group();
   const pickables: THREE.Object3D[] = [];
   const items: StationSpriteSet["items"] = [];
+  const labelSlots = makeStationLabelSlots(positions);
 
   for (const station of positions) {
     const icon = new THREE.Sprite(
@@ -326,6 +351,10 @@ function makeStationSprites(
     );
     icon.scale.setScalar(0.082);
     icon.userData.pickName = station.name;
+    icon.userData.screenSize = {
+      width: STATION_ICON_SCREEN_SIZE_PX,
+      height: STATION_ICON_SCREEN_SIZE_PX,
+    };
     group.add(icon);
     pickables.push(icon);
 
@@ -341,19 +370,68 @@ function makeStationSprites(
     );
     label.scale.set(0.34, 0.074, 1);
     label.userData.pickName = station.name;
+    label.userData.pickBox = {
+      width: STATION_LABEL_SCREEN_WIDTH_PX,
+      height: STATION_LABEL_SCREEN_HEIGHT_PX,
+    };
+    label.userData.screenSize = {
+      width: STATION_LABEL_SCREEN_WIDTH_PX,
+      height: STATION_LABEL_SCREEN_HEIGHT_PX,
+    };
     label.userData.disposeMap = true;
     group.add(label);
     pickables.push(label);
-    items.push({ name: station.name, icon, label });
-    updateStationSpriteItem({ name: station.name, icon, label }, station);
+    const labelSlot = labelSlots.get(station.name) ?? { index: 0, total: 1 };
+    const stationItem = {
+      name: station.name,
+      icon,
+      label,
+      labelSlot,
+      labelAnchor: new THREE.Vector3(),
+    };
+    items.push(stationItem);
+    updateStationSpriteItem(
+      stationItem,
+      station,
+      labelSlot
+    );
   }
 
   return { group, pickables, items };
 }
 
+function makeStationLabelSlots(positions: SatellitePosition[]): Map<string, StationLabelSlot> {
+  const clusters = new Map<string, SatellitePosition[]>();
+
+  for (const position of positions) {
+    const key = [
+      Math.round(position.latitude * 10),
+      Math.round(position.longitude * 10),
+      Math.round(position.altitude / 10),
+    ].join(":");
+    const cluster = clusters.get(key);
+    if (cluster) {
+      cluster.push(position);
+    } else {
+      clusters.set(key, [position]);
+    }
+  }
+
+  const slots = new Map<string, StationLabelSlot>();
+  for (const cluster of clusters.values()) {
+    const sorted = [...cluster].sort((a, b) => a.name.localeCompare(b.name));
+    sorted.forEach((position, index) => {
+      slots.set(position.name, { index, total: sorted.length });
+    });
+  }
+
+  return slots;
+}
+
 function updateStationSpriteItem(
   item: StationSpriteSet["items"][number],
-  station: SatellitePosition
+  station: SatellitePosition,
+  labelSlot: StationLabelSlot = { index: 0, total: 1 }
 ): void {
   const position = latLonAltitudeToVector(
     station.latitude,
@@ -368,8 +446,13 @@ function updateStationSpriteItem(
     tangent.set(1, 0, 0);
   }
 
+  item.labelSlot = labelSlot;
+
   item.icon.position.copy(position);
-  item.label.position.copy(position).addScaledVector(tangent, 0.105).addScaledVector(radial, 0.014);
+  item.labelAnchor
+    .copy(position)
+    .addScaledVector(radial, 0.016);
+  item.label.position.copy(item.labelAnchor);
 }
 
 function updateStationSprites(
@@ -377,10 +460,91 @@ function updateStationSprites(
   positions: SatellitePosition[]
 ): void {
   const positionMap = new Map(positions.map((position) => [position.name, position]));
+  const labelSlots = makeStationLabelSlots(positions);
 
   for (const item of spriteSet.items) {
     const position = positionMap.get(item.name);
-    if (position) updateStationSpriteItem(item, position);
+    if (position) updateStationSpriteItem(item, position, labelSlots.get(item.name));
+  }
+}
+
+function getWorldUnitsPerPixel(
+  point: THREE.Vector3,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer
+): number {
+  const height = Math.max(1, renderer.domElement.clientHeight);
+  const cameraPosition = camera.getWorldPosition(new THREE.Vector3());
+  const distance = cameraPosition.distanceTo(point);
+  const visibleHeight = 2 * Math.tan(degToRad(camera.fov) / 2) * distance;
+
+  return visibleHeight / height;
+}
+
+function updateScreenSizedSprite(
+  sprite: THREE.Sprite,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer,
+  scaleAnchor?: THREE.Vector3
+): void {
+  const screenSize = sprite.userData.screenSize as { width: number; height: number } | undefined;
+  if (!screenSize) return;
+
+  const worldUnitsPerPixel = getWorldUnitsPerPixel(
+    scaleAnchor ?? sprite.getWorldPosition(new THREE.Vector3()),
+    camera,
+    renderer
+  );
+  sprite.scale.set(
+    screenSize.width * worldUnitsPerPixel,
+    screenSize.height * worldUnitsPerPixel,
+    1
+  );
+}
+
+function offsetSpriteByScreenPixels(
+  sprite: THREE.Sprite,
+  anchor: THREE.Vector3,
+  offsetX: number,
+  offsetY: number,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer
+): void {
+  if (offsetX === 0 && offsetY === 0) {
+    sprite.position.copy(anchor);
+    return;
+  }
+
+  const worldUnitsPerPixel = getWorldUnitsPerPixel(anchor, camera, renderer);
+  const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+  const screenRight = new THREE.Vector3().crossVectors(cameraDirection, camera.up).normalize();
+  const screenUp = new THREE.Vector3().crossVectors(screenRight, cameraDirection).normalize();
+
+  sprite.position
+    .copy(anchor)
+    .addScaledVector(screenRight, offsetX * worldUnitsPerPixel)
+    .addScaledVector(screenUp, -offsetY * worldUnitsPerPixel);
+}
+
+function updateStationScreenScales(
+  spriteSet: StationSpriteSet | null,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer
+): void {
+  if (!spriteSet) return;
+
+  for (const item of spriteSet.items) {
+    const scaleAnchor = item.icon.getWorldPosition(new THREE.Vector3());
+    updateScreenSizedSprite(item.icon, camera, renderer, scaleAnchor);
+    updateScreenSizedSprite(item.label, camera, renderer, scaleAnchor);
+    offsetSpriteByScreenPixels(
+      item.label,
+      item.labelAnchor,
+      STATION_LABEL_OFFSET_X_PX,
+      (item.labelSlot.index - (item.labelSlot.total - 1) / 2) * STATION_LABEL_STACK_STEP_PX,
+      camera,
+      renderer
+    );
   }
 }
 
@@ -418,6 +582,73 @@ function isOccludedByEarth(point: THREE.Vector3, camera: THREE.PerspectiveCamera
   return closestPoint.length() < EARTH_SCENE_RADIUS * 1.012;
 }
 
+function getScreenDistance(
+  point: THREE.Vector3,
+  camera: THREE.PerspectiveCamera,
+  rect: DOMRect,
+  clientX: number,
+  clientY: number
+): number {
+  const projected = point.clone().project(camera);
+  const x = rect.left + (projected.x + 1) * rect.width / 2;
+  const y = rect.top + (1 - projected.y) * rect.height / 2;
+
+  return Math.hypot(clientX - x, clientY - y);
+}
+
+function getScreenPoint(
+  point: THREE.Vector3,
+  camera: THREE.PerspectiveCamera,
+  rect: DOMRect
+): { x: number; y: number; z: number } {
+  const projected = point.clone().project(camera);
+
+  return {
+    x: rect.left + (projected.x + 1) * rect.width / 2,
+    y: rect.top + (1 - projected.y) * rect.height / 2,
+    z: projected.z,
+  };
+}
+
+function getPickScreenThreshold(object: THREE.Object3D): number {
+  return object instanceof THREE.Points ? SATELLITE_PICK_SCREEN_THRESHOLD_PX : SPRITE_PICK_SCREEN_THRESHOLD_PX;
+}
+
+function getLabelPickCandidates(
+  pickables: THREE.Object3D[],
+  camera: THREE.PerspectiveCamera,
+  rect: DOMRect,
+  clientX: number,
+  clientY: number
+): PickCandidate[] {
+  const cameraPosition = camera.getWorldPosition(new THREE.Vector3());
+  const candidates: PickCandidate[] = [];
+
+  for (const object of pickables) {
+    const pickBox = object.userData.pickBox as { width: number; height: number } | undefined;
+    if (!pickBox) continue;
+
+    const point = getObjectPosition(object);
+    if (!point || isOccludedByEarth(point, camera)) continue;
+
+    const screenPoint = getScreenPoint(point, camera, rect);
+    if (screenPoint.z < -1 || screenPoint.z > 1) continue;
+
+    const dx = clientX - screenPoint.x;
+    const dy = clientY - screenPoint.y;
+    if (Math.abs(dx) > pickBox.width / 2 || Math.abs(dy) > pickBox.height / 2) continue;
+
+    candidates.push({
+      object,
+      distance: cameraPosition.distanceTo(point),
+      screenDistance: Math.hypot(dx, dy),
+      priority: 0,
+    });
+  }
+
+  return candidates;
+}
+
 function makeOrbitPreview(
   selectedSatellite: SatellitePosition,
   orbitPath: SatellitePath
@@ -430,9 +661,16 @@ function makeOrbitPreview(
   if (points.length < 2) return group;
 
   const orbitAltitude = Math.max(selectedSatellite.altitude, 420);
-  const vectors = points.map(([latitude, longitude]) =>
-    latLonAltitudeToVector(latitude, longitude, orbitAltitude, 0.012)
+  const currentVector = latLonAltitudeToVector(
+    selectedSatellite.latitude,
+    selectedSatellite.longitude,
+    orbitAltitude,
+    0.018
   );
+  const vectors = points.map(([latitude, longitude]) =>
+    latLonAltitudeToVector(latitude, longitude, orbitAltitude, 0.018)
+  );
+  vectors[0] = currentVector;
   for (let index = 0; index < vectors.length - 1; index += 1) {
     const progress = index / Math.max(vectors.length - 2, 1);
     const curve = new THREE.LineCurve3(vectors[index], vectors[index + 1]);
@@ -462,17 +700,15 @@ function makeOrbitPreview(
     group.add(glow, line);
   }
 
-  for (let minutes = 0; minutes <= 90; minutes += 15) {
-    const point = minutes === 0
-      ? [selectedSatellite.latitude, selectedSatellite.longitude] as [number, number]
-      : points[Math.min(Math.round(minutes / 2), points.length - 1)];
+  for (let minutes = 15; minutes <= 90; minutes += 15) {
+    const point = points[Math.min(Math.round(minutes / 2), points.length - 1)];
 
     if (!point) continue;
 
     const progress = minutes / 90;
     const color = getOrbitPredictionColor(progress);
     const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(minutes === 0 ? 0.010 : 0.0065, 14, 8),
+      new THREE.SphereGeometry(0.0065, 14, 8),
       new THREE.MeshBasicMaterial({
         color,
         transparent: true,
@@ -483,7 +719,7 @@ function makeOrbitPreview(
     );
 
     marker.position.copy(
-      latLonAltitudeToVector(point[0], point[1], orbitAltitude, 0.02)
+      latLonAltitudeToVector(point[0], point[1], orbitAltitude, 0.018)
     );
     group.add(marker);
   }
@@ -523,6 +759,7 @@ function Earth3DView({
   additionalGroups,
   positionVersion,
   earthRotationEnabled,
+  dayNightEnabled,
   onSelectSatellite,
   onFollowSatellite,
 }: Earth3DViewProps) {
@@ -535,6 +772,7 @@ function Earth3DView({
   const satelliteRootRef = useRef<THREE.Group | null>(null);
   const selectedRootRef = useRef<THREE.Group | null>(null);
   const sunUniformRef = useRef<THREE.Uniform<THREE.Vector3> | null>(null);
+  const dayNightUniformRef = useRef<THREE.Uniform<number> | null>(null);
   const stationIconTextureRef = useRef<THREE.Texture | null>(null);
   const pickablesRef = useRef<THREE.Object3D[]>([]);
   const starlinkPointsRef = useRef<THREE.Points | null>(null);
@@ -564,10 +802,24 @@ function Earth3DView({
     .sort()
     .join("|");
   const selectedOrbitKey = selectedSatellite ? selectedSatellite.name : "";
+  const selectedOrbitPositionKey = selectedSatellite
+    ? [
+      selectedSatellite.name,
+      selectedSatellite.latitude.toFixed(2),
+      selectedSatellite.longitude.toFixed(2),
+      selectedSatellite.altitude.toFixed(1),
+    ].join(":")
+    : "";
 
   useEffect(() => {
     earthRotationEnabledRef.current = earthRotationEnabled;
   }, [earthRotationEnabled]);
+
+  useEffect(() => {
+    if (dayNightUniformRef.current) {
+      dayNightUniformRef.current.value = dayNightEnabled ? 1 : 0;
+    }
+  }, [dayNightEnabled]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -625,6 +877,7 @@ function Earth3DView({
         specularTexture: { value: specularTexture },
         sunDirection: { value: sunDirection.clone() },
         cameraPositionUniform: { value: camera.position },
+        dayNightMix: { value: dayNightEnabled ? 1 : 0 },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -645,6 +898,7 @@ function Earth3DView({
         uniform sampler2D specularTexture;
         uniform vec3 sunDirection;
         uniform vec3 cameraPositionUniform;
+        uniform float dayNightMix;
         varying vec2 vUv;
         varying vec3 vWorldPosition;
         varying vec3 vWorldNormal;
@@ -658,20 +912,23 @@ function Earth3DView({
           vec3 viewDirection = normalize(cameraPositionUniform - vWorldPosition);
           vec3 halfVector = normalize(sun + viewDirection);
           float sunlight = dot(normal, sun);
-          float dayAmount = smoothstep(-0.16, 0.20, sunlight);
-          float nightAmount = 1.0 - smoothstep(-0.22, 0.05, sunlight);
+          float shadedDayAmount = smoothstep(-0.28, 0.22, sunlight);
+          float shadedNightAmount = 1.0 - smoothstep(-0.34, 0.04, sunlight);
+          float dayAmount = mix(1.0, shadedDayAmount, dayNightMix);
+          float nightAmount = shadedNightAmount * dayNightMix;
           float specular = pow(max(dot(normal, halfVector), 0.0), 42.0) * oceanMask * dayAmount * 0.42;
-          float terminator = pow(1.0 - abs(dayAmount - 0.5) * 2.0, 2.0);
+          vec3 brightBase = base * vec3(1.18, 1.14, 1.08);
           vec3 nightBase = base * vec3(0.035, 0.065, 0.12);
           vec3 lights = cityLights * vec3(1.8, 1.45, 1.05) * nightAmount * 1.55;
-          vec3 dusk = vec3(1.0, 0.45, 0.16) * terminator * 0.16;
           vec3 atmosphere = vec3(0.22, 0.55, 1.0) * pow(max(0.0, 1.0 - dot(normal, viewDirection)), 2.2) * 0.25;
-          vec3 color = mix(nightBase + lights, base, dayAmount) + dusk + atmosphere + vec3(specular);
+          vec3 shadedColor = mix(nightBase + lights, base, dayAmount) + atmosphere + vec3(specular);
+          vec3 color = mix(brightBase + atmosphere * 0.45, shadedColor, dayNightMix);
           gl_FragColor = vec4(color, 1.0);
         }
       `,
     });
     sunUniformRef.current = earthMaterial.uniforms.sunDirection as THREE.Uniform<THREE.Vector3>;
+    dayNightUniformRef.current = earthMaterial.uniforms.dayNightMix as THREE.Uniform<number>;
 
     const earth = new THREE.Mesh(
       new THREE.SphereGeometry(EARTH_SCENE_RADIUS, 128, 64),
@@ -761,6 +1018,7 @@ function Earth3DView({
         clouds.rotation.y += 0.00005;
       }
       controls.update();
+      updateStationScreenScales(stationSpriteSetRef.current, camera, renderer);
       renderer.render(scene, camera);
       animationId = requestAnimationFrame(animate);
     };
@@ -893,7 +1151,7 @@ function Earth3DView({
     if (orbitPath) {
       selectedRoot.add(makeOrbitPreview(selectedSatellite, orbitPath));
     }
-  }, [selectedOrbitKey, selectedSatelliteName, satellitePaths]);
+  }, [selectedOrbitKey, selectedOrbitPositionKey, selectedSatelliteName, satellitePaths]);
 
   const pickSatellite = (event: MouseEvent<HTMLDivElement>, follow: boolean) => {
     if (pointerDraggedRef.current) {
@@ -911,13 +1169,33 @@ function Earth3DView({
     pointerRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
     const raycaster = raycasterRef.current;
-    raycaster.params.Points.threshold = 0.035;
+    raycaster.params.Points.threshold = SATELLITE_PICK_WORLD_THRESHOLD;
     raycaster.setFromCamera(pointerRef.current, camera);
     const intersections = raycaster.intersectObjects(pickablesRef.current, false);
-    const visibleHit = intersections.find((intersection) => {
+    const visibleHits = intersections.flatMap((intersection) => {
       const point = getObjectPosition(intersection.object, intersection.index);
-      return point !== null && !isOccludedByEarth(point, camera);
+      if (!point || isOccludedByEarth(point, camera)) return [];
+
+      const screenDistance = getScreenDistance(point, camera, rect, event.clientX, event.clientY);
+      if (screenDistance > getPickScreenThreshold(intersection.object)) return [];
+
+      return [{
+        object: intersection.object,
+        index: intersection.index,
+        distance: intersection.distance,
+        screenDistance,
+        priority: 1,
+      } satisfies PickCandidate];
     });
+    const visibleHit = [
+      ...getLabelPickCandidates(pickablesRef.current, camera, rect, event.clientX, event.clientY),
+      ...visibleHits,
+    ].sort(
+      (a, b) =>
+        a.priority - b.priority ||
+        a.screenDistance - b.screenDistance ||
+        a.distance - b.distance
+    )[0];
 
     if (!visibleHit) {
       onSelectSatellite(null);

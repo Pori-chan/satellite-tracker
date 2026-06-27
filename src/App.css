@@ -205,28 +205,11 @@
   position: absolute;
   top: max(12px, env(safe-area-inset-top, 0px));
   left: max(14px, env(safe-area-inset-left, 0px));
-  right: max(14px, env(safe-area-inset-right, 0px));
+  right: auto;
   display: flex;
   align-items: center;
   gap: 12px;
   min-height: 44px;
-}
-
-.sat-hud-brand {
-  display: inline-flex;
-  align-items: center;
-  min-width: 186px;
-  font-size: 22px;
-  font-weight: 800;
-  -webkit-text-stroke: 0.8px rgba(0, 0, 0, 0.9);
-  paint-order: stroke fill;
-  text-shadow:
-    -1px -1px 0 rgba(0, 0, 0, 0.95),
-    1px -1px 0 rgba(0, 0, 0, 0.95),
-    -1px 1px 0 rgba(0, 0, 0, 0.95),
-    1px 1px 0 rgba(0, 0, 0, 0.95),
-    0 2px 8px rgba(0, 0, 0, 0.92),
-    0 0 18px rgba(0, 136, 255, 0.45);
 }
 
 .sat-hud-mode,
@@ -444,36 +427,31 @@
 }
 
 .sat-hud-prediction-row:nth-child(1) .sat-hud-timeline-dot {
-  background: #008cff;
-  box-shadow: 0 0 14px rgba(0, 140, 255, 0.85);
-}
-
-.sat-hud-prediction-row:nth-child(2) .sat-hud-timeline-dot {
   background: #1c9bff;
   box-shadow: 0 0 13px rgba(28, 155, 255, 0.72);
 }
 
-.sat-hud-prediction-row:nth-child(3) .sat-hud-timeline-dot {
+.sat-hud-prediction-row:nth-child(2) .sat-hud-timeline-dot {
   background: #39aaff;
   box-shadow: 0 0 12px rgba(57, 170, 255, 0.64);
 }
 
-.sat-hud-prediction-row:nth-child(4) .sat-hud-timeline-dot {
+.sat-hud-prediction-row:nth-child(3) .sat-hud-timeline-dot {
   background: #58b8ff;
   box-shadow: 0 0 11px rgba(88, 184, 255, 0.56);
 }
 
-.sat-hud-prediction-row:nth-child(5) .sat-hud-timeline-dot {
+.sat-hud-prediction-row:nth-child(4) .sat-hud-timeline-dot {
   background: #82c9ff;
   box-shadow: 0 0 10px rgba(130, 201, 255, 0.48);
 }
 
-.sat-hud-prediction-row:nth-child(6) .sat-hud-timeline-dot {
+.sat-hud-prediction-row:nth-child(5) .sat-hud-timeline-dot {
   background: #addaff;
   box-shadow: 0 0 9px rgba(173, 218, 255, 0.42);
 }
 
-.sat-hud-prediction-row:nth-child(7) .sat-hud-timeline-dot {
+.sat-hud-prediction-row:nth-child(6) .sat-hud-timeline-dot {
   background: #d7ecff;
   box-shadow: 0 0 8px rgba(215, 236, 255, 0.36);
 }
@@ -590,15 +568,41 @@
   box-shadow: 0 0 8px rgba(0, 136, 255, 0.9);
 }
 
+.sat-hud-day-night-icon {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(90deg, #ffd66b 0 50%, #123052 50% 100%);
+  border: 1px solid rgba(255, 230, 150, 0.8);
+}
+
+.sat-hud-day-night-icon::after {
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.82);
+  content: "";
+  box-shadow: 0 0 8px rgba(255, 214, 107, 0.8);
+}
+
+.satellite-info-panel,
+.satellite-layer-panel {
+  box-sizing: border-box;
+}
+
 @media (max-width: 900px) {
   .sat-hud-top {
-    align-items: flex-start;
-    flex-wrap: wrap;
+    top: max(10px, env(safe-area-inset-top, 0px));
+    left: max(10px, env(safe-area-inset-left, 0px));
+    min-height: 38px;
   }
 
-  .sat-hud-brand {
-    min-width: min(100%, 220px);
-    font-size: 18px;
+  .sat-hud-mode {
+    width: 102px;
+    min-height: 36px;
+  }
+
+  .sat-hud-mode button {
+    font-size: 12px;
   }
 
   .sat-hud-orbit-key {
@@ -613,8 +617,28 @@
   }
 
   .sat-hud-info-card {
-    top: 118px;
+    top: max(58px, calc(env(safe-area-inset-top, 0px) + 58px));
     min-height: 0;
+    max-height: min(260px, calc(100vh - 220px));
+    overflow: auto;
+    padding: 16px 18px;
+  }
+
+  .sat-hud-card h2,
+  .sat-hud-card-title {
+    font-size: 14px;
+  }
+
+  .sat-hud-sat-name {
+    margin-top: 12px;
+    font-size: 18px;
+  }
+
+  .sat-hud-info-grid {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 8px 12px;
+    margin-top: 14px;
+    font-size: 13px;
   }
 
   .sat-hud-prediction-card {
@@ -622,15 +646,108 @@
   }
 
   .sat-hud-bottom {
-    min-height: 74px;
-    padding: 10px 14px;
+    min-height: 0;
+    max-height: min(34vh, 230px);
+    padding: 8px 10px;
     align-items: flex-start;
     flex-direction: column;
+    gap: 8px;
+    overflow: auto;
+  }
+
+  .sat-hud-bottom > div:first-child {
+    grid-template-columns: auto auto;
+    align-items: baseline;
+    column-gap: 8px;
+    font-size: 11px;
+  }
+
+  .sat-hud-bottom > div:first-child strong {
+    font-size: 13px;
   }
 
   .sat-hud-bottom-legend {
-    justify-content: flex-start;
-    gap: 12px;
-    font-size: 13px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+    width: 100%;
+    justify-content: stretch;
+    gap: 7px;
+    font-size: 12px;
+  }
+
+  .sat-hud-bottom-legend > span {
+    display: none;
+  }
+
+  .sat-hud-mini-toggle {
+    min-height: 34px;
+    padding: 6px 8px;
+    border: 1px solid rgba(98, 160, 210, 0.22);
+    border-radius: 7px;
+    background: rgba(3, 11, 20, 0.62);
+  }
+
+  .sat-hud-mini-toggle b {
+    font-size: 11px;
+  }
+
+  .sat-hud-mini-toggle small {
+    font-size: 10px;
+  }
+
+  .satellite-info-panel {
+    top: max(58px, calc(env(safe-area-inset-top, 0px) + 58px)) !important;
+    right: max(8px, env(safe-area-inset-right, 0px)) !important;
+    left: max(8px, env(safe-area-inset-left, 0px)) !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: min(32vh, 220px) !important;
+    overflow: auto !important;
+    padding: 8px 10px !important;
+    font-size: 12px !important;
+  }
+
+  .satellite-info-panel [title] {
+    max-width: none !important;
+    font-size: 15px !important;
+  }
+
+  .satellite-info-details {
+    grid-template-columns: 48px minmax(0, 1fr) !important;
+    column-gap: 8px !important;
+  }
+
+  .satellite-layer-panel {
+    right: max(8px, env(safe-area-inset-right, 0px)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
+    left: max(8px, env(safe-area-inset-left, 0px)) !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: min(34vh, 240px) !important;
+    padding: 8px 10px !important;
+    font-size: 12px !important;
+  }
+
+  .satellite-layer-panel button {
+    grid-template-columns: 28px minmax(72px, 1fr) auto !important;
+    min-height: 24px !important;
+    column-gap: 6px !important;
+  }
+
+  .satellite-layer-panel button > span:first-child {
+    width: 28px !important;
+    height: 24px !important;
+  }
+}
+
+@media (max-height: 620px) and (max-width: 900px) {
+  .sat-hud-info-card,
+  .satellite-info-panel {
+    max-height: 30vh !important;
+  }
+
+  .sat-hud-bottom,
+  .satellite-layer-panel {
+    max-height: 30vh !important;
   }
 }
