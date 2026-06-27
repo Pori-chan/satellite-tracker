@@ -11,8 +11,6 @@ import "./App.css";
 
 type TleSatellite = {
   name: string;
-  line1: string;
-  line2: string;
   satrec: satellite.SatRec;
 };
 
@@ -80,8 +78,9 @@ const CACHE_EXPIRE_MS = 2 * 60 * 60 * 1000;
 const WORLD_COPY_LONGITUDE_OFFSETS = [-720, -360, 0, 360, 720];
 const STATION_ICON_URL = `${import.meta.env.BASE_URL}station-icon.png`;
 
-const STARLINK_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STARLINK&FORMAT=tle";
-const STATION_TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STATIONS&FORMAT=tle";
+const STARLINK_GP_URL = "https://celestrak.org/NORAD/elements/gp.php?NAME=STARLINK&FORMAT=JSON";
+const STATION_GP_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=STATIONS&FORMAT=JSON";
+const TLE_BACKUP_BASE_URL = `${import.meta.env.BASE_URL}tle-backup`;
 
 const ADDITIONAL_SATELLITE_GROUPS = [
   {
@@ -112,9 +111,16 @@ const STATION_ANIMATION_FRAME_MS = 1000 / STATION_ANIMATION_FPS;
 const ADDITIONAL_ANIMATION_FRAME_MS = 1000 / ADDITIONAL_ANIMATION_FPS;
 const STARLINK_VIEW_PADDING_LONGITUDE = 20;
 const STARLINK_VIEW_PADDING_LATITUDE = 10;
-const ORBIT_PREDICTION_MINUTES = [0, 15, 30, 45, 60, 75, 90];
+const ORBIT_PREDICTION_MINUTES = [15, 30, 45, 60, 75, 90];
 
-async function fetchTleWithCache(url: string, cacheKey: string): Promise<string | null> {
+async function fetchOrbitDataWithCache(
+  url: string,
+  cacheKey: string,
+  backupUrls = [
+    `${TLE_BACKUP_BASE_URL}/${cacheKey}.json`,
+    `${TLE_BACKUP_BASE_URL}/${cacheKey}.tle`,
+  ]
+): Promise<string | null> {
   const timestampKey = `${cacheKey}_timestamp`;
 
   const cachedText = localStorage.getItem(cacheKey);
@@ -124,7 +130,7 @@ async function fetchTleWithCache(url: string, cacheKey: string): Promise<string 
     const age = Date.now() - Number(cachedTimestamp);
 
     if (age < CACHE_EXPIRE_MS) {
-      console.log(`${cacheKey} キャッシュ使用 (${Math.floor(age / 60000)}分経過)`);
+      console.log(`${cacheKey} cache hit (${Math.floor(age / 60000)} min old)`);
       return cachedText;
     }
   }
@@ -137,18 +143,73 @@ async function fetchTleWithCache(url: string, cacheKey: string): Promise<string 
 
     localStorage.setItem(cacheKey, text);
     localStorage.setItem(timestampKey, String(Date.now()));
-    console.log(`${cacheKey} 更新取得`);
+    console.log(`${cacheKey} fetched from CelesTrak`);
     return text;
   } catch (error) {
     console.error(error);
 
     if (cachedText) {
-      console.warn(`${cacheKey} 期限切れキャッシュ利用`);
+      console.warn(`${cacheKey} using stale localStorage cache`);
       return cachedText;
+    }
+
+    for (const backupUrl of backupUrls) {
+      try {
+        const backupResponse = await fetch(backupUrl);
+        if (!backupResponse.ok) throw new Error(`HTTP ${backupResponse.status}`);
+
+        const backupText = await backupResponse.text();
+        console.warn(`${cacheKey} using bundled orbit backup: ${backupUrl}`);
+        return backupText;
+      } catch (backupError) {
+        console.error(backupError);
+      }
     }
 
     return null;
   }
+}
+
+function isOmmJsonObject(value: unknown): value is satellite.OMMJsonObject {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "OBJECT_NAME" in value &&
+    "EPOCH" in value &&
+    "MEAN_MOTION" in value
+  );
+}
+
+function parseOmmJsonText(text: string): TleSatellite[] | null {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  const satellites: TleSatellite[] = [];
+
+  for (const entry of entries) {
+    if (!isOmmJsonObject(entry)) continue;
+
+    try {
+      satellites.push({
+        name: entry.OBJECT_NAME,
+        satrec: satellite.json2satrec(entry),
+      });
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  return satellites;
+}
+
+function parseOrbitDataText(text: string): TleSatellite[] {
+  return parseOmmJsonText(text) ?? parseTleText(text);
 }
 
 function parseTleText(text: string): TleSatellite[] {
@@ -166,8 +227,6 @@ function parseTleText(text: string): TleSatellite[] {
 
     satellites.push({
       name: lines[i],
-      line1: lines[i + 1],
-      line2: lines[i + 2],
       satrec: satellite.twoline2satrec(lines[i + 1], lines[i + 2]),
     });
   }
@@ -332,6 +391,7 @@ function App() {
   const [displayMode, setDisplayMode] = useState<DisplayMode>("2d");
   const [clockNow, setClockNow] = useState(() => new Date());
   const [earthRotationEnabled, setEarthRotationEnabled] = useState(false);
+  const [dayNightEnabled, setDayNightEnabled] = useState(true);
   const [showStarlink, setShowStarlink] = useState(true);
   const [showStations, setShowStations] = useState(true);
   const [showAdditionalGroups, setShowAdditionalGroups] = useState<Record<string, boolean>>(
@@ -371,26 +431,26 @@ function App() {
 
   useEffect(() => {
     const load = async () => {
-      const starlinkText = await fetchTleWithCache(
-        STARLINK_TLE_URL,
+      const starlinkText = await fetchOrbitDataWithCache(
+        STARLINK_GP_URL,
         "celestrak_starlink_tle"
       );
-      if (starlinkText) setStarlinkTles(parseTleText(starlinkText));
+      if (starlinkText) setStarlinkTles(parseOrbitDataText(starlinkText));
 
-      const stationText = await fetchTleWithCache(
-        STATION_TLE_URL,
+      const stationText = await fetchOrbitDataWithCache(
+        STATION_GP_URL,
         "celestrak_stations_tle"
       );
-      if (stationText) setStationTles(parseTleText(stationText));
+      if (stationText) setStationTles(parseOrbitDataText(stationText));
 
       const additionalEntries = await Promise.all(
         ADDITIONAL_SATELLITE_GROUPS.map(async (group) => {
-          const text = await fetchTleWithCache(
-            `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group.celestrakGroup}&FORMAT=tle`,
+          const text = await fetchOrbitDataWithCache(
+            `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group.celestrakGroup}&FORMAT=JSON`,
             `celestrak_${group.id}_tle`
           );
 
-          return [group.id, text ? parseTleText(text) : []] as const;
+          return [group.id, text ? parseOrbitDataText(text) : []] as const;
         })
       );
 
@@ -1126,9 +1186,7 @@ function App() {
 
     return ORBIT_PREDICTION_MINUTES.map((minutes) => {
       const pathIndex = Math.round(minutes / 2);
-      const point = minutes === 0
-        ? [selectedSatellite.latitude, selectedSatellite.longitude] as [number, number]
-        : fullPath[pathIndex];
+      const point = fullPath[pathIndex];
 
       return {
         minutes,
@@ -1208,6 +1266,7 @@ function App() {
           additionalGroups={ADDITIONAL_SATELLITE_GROUPS}
           positionVersion={threeDPositionVersion}
           earthRotationEnabled={earthRotationEnabled}
+          dayNightEnabled={dayNightEnabled}
           onSelectSatellite={(name) => {
             setSelectedSatelliteName(name);
             if (!name) setFollowSatelliteName(null);
@@ -1218,9 +1277,6 @@ function App() {
 
       <div className="sat-hud sat-hud-shared" aria-label="Satellite tracker mode controls">
         <header className="sat-hud-top">
-          <div className="sat-hud-brand">
-            <span>Satellite Tracker</span>
-          </div>
           <div className="sat-hud-mode">
             {(["2d", "3d"] as const).map((mode) => (
               <button
@@ -1265,7 +1321,7 @@ function App() {
                     className={index === 0 ? "sat-hud-prediction-row is-now" : "sat-hud-prediction-row"}
                   >
                     <span className="sat-hud-timeline-dot" />
-                    <span>{row.minutes === 0 ? "現在（0分）" : `${row.minutes}分後`}</span>
+                    <span>{`${row.minutes}分後`}</span>
                     <strong>
                       {row.latitude === null || row.longitude === null
                         ? "計算中"
@@ -1284,6 +1340,17 @@ function App() {
             </div>
             <div className="sat-hud-bottom-legend">
               <span><i className="sat-hud-line" />軌道（90分予測）</span>
+              <button
+                type="button"
+                className={dayNightEnabled ? "sat-hud-mini-toggle is-active" : "sat-hud-mini-toggle"}
+                onClick={() => setDayNightEnabled((enabled) => !enabled)}
+              >
+                <i className="sat-hud-day-night-icon" />
+                <span>
+                  <b>昼夜</b>
+                  <small>{dayNightEnabled ? "ON" : "OFF"}</small>
+                </span>
+              </button>
               <button
                 type="button"
                 className={earthRotationEnabled ? "sat-hud-mini-toggle is-active" : "sat-hud-mini-toggle"}
@@ -1356,6 +1423,7 @@ function App() {
       {
         selectedSatellite && displayMode === "2d" && (
           <div
+            className="satellite-info-panel"
             style={{
               position: "absolute",
               top: 10,
@@ -1422,6 +1490,7 @@ function App() {
 
       {displayMode === "2d" && (
       <div
+        className="satellite-layer-panel"
         style={{
           position: "absolute",
           bottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
